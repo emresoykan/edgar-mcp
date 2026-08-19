@@ -341,24 +341,32 @@ def pick_fact(
     if non_dimensional:
         candidates = non_dimensional
     candidates.sort(key=lambda f: _score_fact(f, fy, fp, form, instant), reverse=True)
-    chosen = dict(candidates[0])
+    latest = candidates[0]
+    preferred = next(
+        (
+            candidate
+            for candidate in candidates
+            if _form_kind(candidate.get("form")) == _form_kind(form)
+        ),
+        None,
+    )
+    # Aynı değer sonraki filing'de tekrarlandıysa denetlenmiş/blokla uyumlu
+    # kaynağı koru. Değer değiştiyse en yeni filing gerçek restatement'tır.
+    selected = (
+        preferred
+        if preferred is not None and preferred.get("val") == latest.get("val")
+        else latest
+    )
+    chosen = dict(selected)
     prior = next(
         (
             f
-            for f in candidates[1:]
+            for f in candidates
+            if f is not selected
             if f.get("val") != chosen.get("val")
         ),
         None,
     )
-    if prior is None:
-        prior = next(
-            (
-                f
-                for f in candidates[1:]
-                if f.get("accn") != chosen.get("accn")
-            ),
-            None,
-        )
     if prior is not None:
         chosen["_restated"] = True
         chosen["_previous_value"] = prior.get("val")
@@ -593,6 +601,14 @@ def _day_after(value: str | None) -> str | None:
     return (parsed + timedelta(days=1)).isoformat() if parsed else None
 
 
+_NONNEGATIVE_CASHFLOW_KEYS = {
+    "capex",
+    "depreciation",
+    "dividends",
+    "buybacks",
+}
+
+
 def _derive_quarterly_cashflow(statements: list[dict[str, Any]]) -> None:
     quarters = sorted(
         [
@@ -619,8 +635,10 @@ def _derive_quarterly_cashflow(statements: list[dict[str, Any]]) -> None:
                     break
             if previous is None:
                 continue
-            block[key] = {
-                "value": current["value"] - previous["value"],
+            value = current["value"] - previous["value"]
+            source_accns = [previous.get("accn"), current.get("accn")]
+            derived = {
+                "value": value,
                 "unit": current.get("unit"),
                 "tag": current.get("tag"),
                 "taxonomy": current.get("taxonomy"),
@@ -630,9 +648,16 @@ def _derive_quarterly_cashflow(statements: list[dict[str, Any]]) -> None:
                 "derived": True,
                 "method": "ytd_diff",
                 "source_periods": [previous.get("end"), current.get("end")],
-                "source_accns": [previous.get("accn"), current.get("accn")],
+                "source_accns": source_accns,
                 "source_filed": [previous.get("filed"), current.get("filed")],
             }
+            if source_accns[0] != source_accns[1]:
+                derived["mixed_source"] = True
+            if key in _NONNEGATIVE_CASHFLOW_KEYS and value < 0:
+                derived["raw_derived_value"] = value
+                derived["value"] = None
+                derived["sign_anomaly"] = True
+            block[key] = derived
 
 
 _DEBT_COMPONENT_KEYS = (
@@ -642,6 +667,16 @@ _DEBT_COMPONENT_KEYS = (
     "commercial_paper",
 )
 
+_DEBT_SHORT_TERM_KEYS = ("short_term_borrowings", "commercial_paper")
+_DEBT_OUTPUT_KEYS = (
+    "long_term_debt_total",
+    "long_term_debt_noncurrent",
+    "long_term_debt_current",
+    "short_term_borrowings",
+    "commercial_paper",
+    "total_debt",
+)
+
 
 def _derive_total_debt(balance: dict[str, Any]) -> None:
     direct = balance.get("long_term_debt_total")
@@ -649,14 +684,50 @@ def _derive_total_debt(balance: dict[str, Any]) -> None:
         (key, balance[key]) for key in _DEBT_COMPONENT_KEYS if key in balance
     ]
     if direct is not None:
-        total = dict(direct)
-        total["derived"] = False
-        total["components"] = [str(direct.get("tag") or "LongTermDebt")]
-        if components:
-            total["warning"] = "component_tags_also_present"
+        additive = [
+            (key, balance[key]) for key in _DEBT_SHORT_TERM_KEYS if key in balance
+        ]
+        total = {
+            **direct,
+            "value": direct["value"] + sum(item["value"] for _, item in additive),
+            "derived": bool(additive),
+            "components": [
+                str(direct.get("tag") or "LongTermDebt"),
+                *[str(item.get("tag") or key) for key, item in additive],
+            ],
+        }
+        if additive:
+            total["method"] = "long_term_plus_short_term"
+            total["source_accns"] = [
+                direct.get("accn"),
+                *[item.get("accn") for _, item in additive],
+            ]
+            total["source_filed"] = [
+                direct.get("filed"),
+                *[item.get("filed") for _, item in additive],
+            ]
         balance["total_debt"] = total
         return
     if not components:
+        balance["total_debt"] = {
+            "value": None,
+            "derived": False,
+            "warning": "insufficient_components",
+            "components": [],
+        }
+        return
+    if "long_term_debt_noncurrent" not in balance:
+        balance["total_debt"] = {
+            "value": None,
+            "unit": components[0][1].get("unit"),
+            "end": components[0][1].get("end"),
+            "derived": False,
+            "warning": "insufficient_components",
+            "components": [
+                str(item.get("tag") or key) for key, item in components
+            ],
+            "component_keys": [key for key, _ in components],
+        }
         return
     units = {item.get("unit") for _, item in components}
     ends = {item.get("end") for _, item in components}
@@ -680,6 +751,11 @@ def _derive_total_debt(balance: dict[str, Any]) -> None:
     }
 
 
+def _normalize_debt_schema(balance: dict[str, Any]) -> None:
+    for key in _DEBT_OUTPUT_KEYS:
+        balance.setdefault(key, None)
+
+
 def _mark_tag_changes(statements: list[dict[str, Any]]) -> None:
     ordered = sorted(statements, key=lambda p: p.get("end") or "")
     for section in ("income", "balance", "cashflow"):
@@ -687,6 +763,8 @@ def _mark_tag_changes(statements: list[dict[str, Any]]) -> None:
         for period in ordered:
             block = period.get(section) or {}
             for key, item in block.items():
+                if not isinstance(item, dict):
+                    continue
                 tag = item.get("tag")
                 if not tag:
                     continue
@@ -727,6 +805,7 @@ def extract_financials(
             facts, BALANCE_INSTANT, fy, fp, form, instant=True, end=end
         )
         _derive_total_debt(balance)
+        _normalize_debt_schema(balance)
         statements.append(
             {
                 **{k: v for k, v in period.items() if k != "kind"},

@@ -291,6 +291,9 @@ class PeriodIntegrityTests(unittest.TestCase):
         by_end = {p["end"]: p for p in fy_periods}
         self.assertEqual(set(by_end), {"2024-12-31", "2025-12-31"})
         self.assertEqual(by_end["2024-12-31"]["income"]["revenue"]["value"], 879654)
+        self.assertNotIn(
+            "restated", by_end["2024-12-31"]["income"]["revenue"]
+        )
         self.assertEqual(
             by_end["2024-12-31"]["balance"]["long_term_debt_total"]["value"],
             2344746,
@@ -496,7 +499,25 @@ class ProductionMappingTests(unittest.TestCase):
                                     start="2025-01-01",
                                     filed="2026-02-26",
                                     accn="k25",
-                                )
+                                ),
+                                _fact(
+                                    val=1,
+                                    fy=2026,
+                                    fp="Q1",
+                                    form="10-Q",
+                                    end="2025-12-31",
+                                    filed="2026-05-07",
+                                    accn="q126",
+                                ),
+                                _fact(
+                                    val=1,
+                                    fy=2026,
+                                    fp="Q2",
+                                    form="10-Q",
+                                    end="2025-12-31",
+                                    filed="2026-08-06",
+                                    accn="q226",
+                                ),
                             ]
                         }
                     },
@@ -555,6 +576,11 @@ class ProductionMappingTests(unittest.TestCase):
         self.assertEqual(shares["previous_value"], 60500580)
         self.assertEqual(shares["previous_accn"], "k25")
         self.assertTrue(shares["form_mismatch"])
+        assets = out["periods"][0]["balance"]["assets"]
+        self.assertEqual(assets["form"], "10-K")
+        self.assertEqual(assets["accn"], "k25")
+        self.assertNotIn("restated", assets)
+        self.assertNotIn("form_mismatch", assets)
 
     def test_ytd_cashflow_is_preserved_and_qtd_is_derived(self):
         q1 = dict(
@@ -607,6 +633,20 @@ class ProductionMappingTests(unittest.TestCase):
                             ]
                         }
                     },
+                    "PaymentsForRepurchaseOfCommonStock": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=24400,
+                                    **{**q1, "filed": "2026-08-06", "accn": "q226"},
+                                ),
+                                _fact(
+                                    val=24395,
+                                    **{**q2, "start": "2026-01-01"},
+                                ),
+                            ]
+                        }
+                    },
                 }
             },
         }
@@ -624,6 +664,12 @@ class ProductionMappingTests(unittest.TestCase):
         self.assertEqual(q2_cashflow["cfo"]["method"], "ytd_diff")
         self.assertEqual(q2_cashflow["cfo"]["start"], "2026-04-01")
         self.assertEqual(q2_cashflow["cfo"]["source_accns"], ["q126", "q226"])
+        self.assertTrue(q2_cashflow["cfo"]["mixed_source"])
+        buybacks = q2_cashflow["buybacks"]
+        self.assertIsNone(buybacks["value"])
+        self.assertEqual(buybacks["raw_derived_value"], -5)
+        self.assertTrue(buybacks["sign_anomaly"])
+        self.assertNotIn("mixed_source", buybacks)
 
     def test_total_debt_prefers_total_and_falls_back_to_components(self):
         periods = [
@@ -699,11 +745,14 @@ class ProductionMappingTests(unittest.TestCase):
         direct = by_end["2024-12-31"]["balance"]
         self.assertNotIn("debt_current", direct)
         self.assertEqual(direct["commercial_paper"]["value"], 45)
-        self.assertEqual(direct["total_debt"]["value"], 1000)
-        self.assertFalse(direct["total_debt"]["derived"])
-        self.assertEqual(direct["total_debt"]["components"], ["LongTermDebt"])
+        self.assertEqual(direct["total_debt"]["value"], 1105)
+        self.assertTrue(direct["total_debt"]["derived"])
         self.assertEqual(
-            direct["total_debt"]["warning"], "component_tags_also_present"
+            direct["total_debt"]["components"],
+            ["LongTermDebt", "ShortTermBorrowings", "CommercialPaper"],
+        )
+        self.assertEqual(
+            direct["total_debt"]["method"], "long_term_plus_short_term"
         )
 
         fallback = by_end["2023-12-31"]["balance"]["total_debt"]
@@ -719,6 +768,50 @@ class ProductionMappingTests(unittest.TestCase):
                 "commercial_paper",
             ],
         )
+
+    def test_total_debt_is_null_when_only_short_term_component_is_known(self):
+        period = dict(
+            fy=2026,
+            fp="Q2",
+            form="10-Q",
+            end="2026-06-30",
+            filed="2026-08-06",
+            accn="q226",
+        )
+        facts = {
+            "cik": 1296445,
+            "entityName": "ORMAT TECHNOLOGIES INC",
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=1,
+                                    start="2026-04-01",
+                                    **period,
+                                )
+                            ]
+                        }
+                    },
+                    "Assets": {
+                        "units": {"USD": [_fact(val=1, **period)]}
+                    },
+                    "CommercialPaper": {
+                        "units": {"USD": [_fact(val=99986, **period)]}
+                    },
+                }
+            },
+        }
+        out = extract_financials(facts, annual=0, quarterly=1)
+        balance = out["periods"][0]["balance"]
+        self.assertIsNone(balance["long_term_debt_total"])
+        self.assertEqual(balance["commercial_paper"]["value"], 99986)
+        self.assertIsNone(balance["total_debt"]["value"])
+        self.assertEqual(
+            balance["total_debt"]["warning"], "insufficient_components"
+        )
+        self.assertEqual(balance["total_debt"]["components"], ["CommercialPaper"])
 
 
 if __name__ == "__main__":

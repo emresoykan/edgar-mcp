@@ -1,0 +1,17 @@
+{
+  "name": "edgar-mcp",
+  "install": "if ! python3 -m venv --help >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y python3.12-venv; fi\npython3 -m venv .venv\n.venv/bin/pip install -U pip\n.venv/bin/pip install -r requirements.txt\nif [ ! -f .env ]; then cp .env.example .env; fi",
+  "terminals": [
+    {
+      "name": "MCP HTTP",
+      "command": "MCP_TRANSPORT=http PORT=8000 .venv/bin/python server.py",
+      "description": "EDGAR MCP Streamable HTTP server. Health at http://127.0.0.1:8000/health, MCP at /mcp."
+    }
+  ],
+  "ports": [
+    {
+      "name": "MCP HTTP",
+      "port": 8000
+    }
+  ]
+}

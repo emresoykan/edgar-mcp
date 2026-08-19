@@ -1,6 +1,7 @@
 {
   "name": "edgar-mcp",
-  "install": "if ! python3 -m venv --help >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y python3.12-venv; fi\npython3 -m venv .venv\n.venv/bin/pip install -U pip\n.venv/bin/pip install -r requirements.txt\nif [ ! -f .env ]; then cp .env.example .env; fi",
+  "install": "bash scripts/cloud-install.sh",
+  "start": "test -x .venv/bin/python && .venv/bin/python -c \"import mcp, fastapi, httpx\"",
   "terminals": [
     {
       "name": "MCP HTTP",

@@ -5,9 +5,9 @@
 This repo is a **headless MCP server** (SEC EDGAR data). There is no GUI or web
 UI — verify it with the terminal / MCP protocol, not a browser.
 
-Cloud Agent bootstrap lives in `.cursor/environment.json`: `install` creates
-`.venv` and copies `.env.example` → `.env` if missing; `terminals` starts the
-HTTP MCP server on port 8000.
+Cloud Agent bootstrap lives in `.cursor/environment.json`: `install` runs
+`scripts/cloud-install.sh` (Python 3.12 venv, `requirements.txt`, seed `.env`);
+`terminals` starts the HTTP MCP server on port 8000.
 
 ### Layout / how to run
 - Python 3.12. Dependencies live in a venv at `.venv` (created by `install`).

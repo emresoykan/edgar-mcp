@@ -11,7 +11,7 @@ uymayan fact bloğa doldurulmaz.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 _CLEAN_FRAME = re.compile(r"CY\d{4}(?:Q[1-4])?I?")
@@ -126,20 +126,26 @@ BALANCE_INSTANT: dict[str, list[tuple[str, str]]] = {
         ("us-gaap", "LiabilitiesCurrent"),
         ("ifrs-full", "CurrentLiabilities"),
     ],
-    "long_term_debt": [
+    "long_term_debt_total": [
         ("us-gaap", "LongTermDebt"),
+    ],
+    "long_term_debt_noncurrent": [
         ("us-gaap", "LongTermDebtNoncurrent"),
         ("us-gaap", "LongTermDebtAndCapitalLeaseObligations"),
         ("ifrs-full", "NoncurrentPortionOfNoncurrentLoansReceived"),
         ("ifrs-full", "LongtermBorrowings"),
     ],
-    "debt_current": [
+    "long_term_debt_current": [
         ("us-gaap", "LongTermDebtCurrent"),
-        ("us-gaap", "DebtCurrent"),
-        ("us-gaap", "ShortTermBorrowings"),
-        ("us-gaap", "CommercialPaper"),
         ("ifrs-full", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings"),
         ("ifrs-full", "CurrentPortionOfLongtermBorrowings"),
+    ],
+    "short_term_borrowings": [
+        ("us-gaap", "ShortTermBorrowings"),
+        ("ifrs-full", "ShorttermBorrowings"),
+    ],
+    "commercial_paper": [
+        ("us-gaap", "CommercialPaper"),
     ],
     "minority_interest": [
         ("us-gaap", "MinorityInterest"),
@@ -290,25 +296,16 @@ def _score_fact(
     form: str | None,
     instant: bool,
 ) -> tuple:
-    """Yüksek skor kazanır. Tarih süzgecinden sonra tie-break."""
+    """Tarih eşleşmesinden sonra en yeni filing kazanır."""
     form_kind = _form_kind(form)
     fact_kind = _form_kind(str(fact.get("form") or ""))
     form_ok = 1 if form_kind and fact_kind == form_kind else 0
     fy_ok = 1 if fy is not None and fact.get("fy") == fy else 0
     fp_ok = 1 if fp and fact.get("fp") == fp else 0
-    dimensional = 1 if _frame_dimensional(str(fact.get("frame") or "")) else 0
     amendment = 1 if str(fact.get("form") or "").endswith("/A") else 0
-    basis_rank = 0
-    if not instant:
-        basis = duration_basis(fact, fp or str(fact.get("fp") or ""))
-        if (fp or fact.get("fp")) == "FY" and basis == "annual":
-            basis_rank = 2
-        elif (fp or fact.get("fp")) != "FY" and basis == "qtd":
-            basis_rank = 2
-        elif (fp or fact.get("fp")) != "FY" and basis == "ytd":
-            basis_rank = 1
     filed = str(fact.get("filed") or "")
-    return (form_ok, basis_rank, 0 if dimensional else 1, fy_ok, fp_ok, amendment, filed)
+    accn = str(fact.get("accn") or "")
+    return (filed, amendment, form_ok, fy_ok, fp_ok, accn)
 
 
 def pick_fact(
@@ -320,20 +317,46 @@ def pick_fact(
     instant: bool,
     end: str | None = None,
     start: str | None = None,
+    basis: str | None = None,
 ) -> dict[str, Any] | None:
-    """Dönem tarihine uymayan fact'i alma — yoksa None (yakın tarihi doldurma)."""
+    """Ekonomik tarih eşleşir; aynı tarih için en yeni `filed` kazanır."""
     candidates = [f for f in series if f.get("form") in STATEMENT_FORMS]
     if end:
         candidates = [f for f in candidates if f.get("end") == end]
     elif instant:
         return None
     if not instant and start:
-        matched = [f for f in candidates if f.get("start") == start]
-        candidates = matched
+        candidates = [f for f in candidates if f.get("start") == start]
+    if not instant and basis:
+        candidates = [
+            f
+            for f in candidates
+            if duration_basis(f, fp or str(f.get("fp") or "")) == basis
+        ]
     if not candidates:
         return None
+    non_dimensional = [
+        f for f in candidates if not _frame_dimensional(str(f.get("frame") or ""))
+    ]
+    if non_dimensional:
+        candidates = non_dimensional
     candidates.sort(key=lambda f: _score_fact(f, fy, fp, form, instant), reverse=True)
-    return candidates[0]
+    chosen = dict(candidates[0])
+    prior = next(
+        (
+            f
+            for f in candidates[1:]
+            if f.get("accn") != chosen.get("accn")
+            or f.get("val") != chosen.get("val")
+        ),
+        None,
+    )
+    if prior is not None:
+        chosen["_restated"] = True
+        chosen["_previous_value"] = prior.get("val")
+        chosen["_previous_filed"] = prior.get("filed")
+        chosen["_previous_accn"] = prior.get("accn")
+    return chosen
 
 
 def _line_item(
@@ -346,6 +369,7 @@ def _line_item(
     instant: bool,
     end: str | None,
     start: str | None = None,
+    basis: str | None = None,
 ) -> dict[str, Any] | None:
     for taxonomy, tag in aliases:
         concept = _concept(facts, taxonomy, tag)
@@ -353,7 +377,14 @@ def _line_item(
             continue
         unit, series = _unit_series(concept)
         chosen = pick_fact(
-            series, fy, fp, form, instant=instant, end=end, start=start
+            series,
+            fy,
+            fp,
+            form,
+            instant=instant,
+            end=end,
+            start=start,
+            basis=basis,
         )
         if chosen is None or chosen.get("val") is None:
             continue
@@ -367,6 +398,13 @@ def _line_item(
             "accn": chosen.get("accn"),
             "form": chosen.get("form"),
         }
+        if chosen.get("_restated"):
+            item["restated"] = True
+            item["previous_value"] = chosen.get("_previous_value")
+            item["previous_filed"] = chosen.get("_previous_filed")
+            item["previous_accn"] = chosen.get("_previous_accn")
+        if _form_kind(chosen.get("form")) != _form_kind(form):
+            item["form_mismatch"] = True
         if not instant:
             item["start"] = chosen.get("start")
             item["basis"] = duration_basis(chosen, fp or str(chosen.get("fp") or ""))
@@ -384,6 +422,7 @@ def _fill_statement(
     instant: bool,
     end: str | None,
     start: str | None = None,
+    basis: str | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, aliases in mapping.items():
@@ -396,6 +435,7 @@ def _fill_statement(
             instant=instant,
             end=end,
             start=None if instant else start,
+            basis=basis,
         )
         if item is not None:
             out[key] = item
@@ -489,6 +529,149 @@ def collect_periods(
     return _clean(annual_rows[:annual]) + _clean(quarter_rows[:quarterly])
 
 
+def _cashflow_for_period(
+    facts: dict[str, Any],
+    period: dict[str, Any],
+) -> dict[str, Any]:
+    fy, fp, form, end = period["fy"], period["fp"], period["form"], period["end"]
+    start = period.get("start")
+    reported = _fill_statement(
+        facts,
+        CASHFLOW_DURATION,
+        fy,
+        fp,
+        form,
+        instant=False,
+        end=end,
+        start=start,
+    )
+    if _form_kind(form) != "quarter":
+        return reported
+
+    ytd = _fill_statement(
+        facts,
+        CASHFLOW_DURATION,
+        fy,
+        fp,
+        form,
+        instant=False,
+        end=end,
+        basis="ytd",
+    )
+    # Q1 için QTD ve YTD aynı ekonomik aralıktır.
+    if fp == "Q1":
+        for key, item in reported.items():
+            ytd.setdefault(key, item)
+    for key, item in ytd.items():
+        ytd_item = dict(item)
+        ytd_item["basis"] = "ytd"
+        ytd_item["derived"] = False
+        reported[f"{key}_ytd"] = ytd_item
+    return reported
+
+
+def _compatible_ytd(current: dict[str, Any], previous: dict[str, Any]) -> bool:
+    return (
+        current.get("start")
+        and current.get("start") == previous.get("start")
+        and current.get("unit") == previous.get("unit")
+        and current.get("taxonomy") == previous.get("taxonomy")
+        and current.get("tag") == previous.get("tag")
+    )
+
+
+def _day_after(value: str | None) -> str | None:
+    parsed = _parse_date(value)
+    return (parsed + timedelta(days=1)).isoformat() if parsed else None
+
+
+def _derive_quarterly_cashflow(statements: list[dict[str, Any]]) -> None:
+    quarters = sorted(
+        [
+            period
+            for period in statements
+            if _form_kind(period.get("form")) == "quarter"
+        ],
+        key=lambda period: period.get("end") or "",
+    )
+    for index, period in enumerate(quarters):
+        block = period.get("cashflow") or {}
+        for key in CASHFLOW_DURATION:
+            if key in block:
+                block[key].setdefault("derived", False)
+                continue
+            current = block.get(f"{key}_ytd")
+            if current is None:
+                continue
+            previous = None
+            for candidate_period in reversed(quarters[:index]):
+                candidate = (candidate_period.get("cashflow") or {}).get(f"{key}_ytd")
+                if candidate is not None and _compatible_ytd(current, candidate):
+                    previous = candidate
+                    break
+            if previous is None:
+                continue
+            block[key] = {
+                "value": current["value"] - previous["value"],
+                "unit": current.get("unit"),
+                "tag": current.get("tag"),
+                "taxonomy": current.get("taxonomy"),
+                "start": _day_after(previous.get("end")),
+                "end": current.get("end"),
+                "basis": "qtd",
+                "derived": True,
+                "method": "ytd_diff",
+                "source_periods": [previous.get("end"), current.get("end")],
+                "source_accns": [previous.get("accn"), current.get("accn")],
+                "source_filed": [previous.get("filed"), current.get("filed")],
+            }
+
+
+_DEBT_COMPONENT_KEYS = (
+    "long_term_debt_noncurrent",
+    "long_term_debt_current",
+    "short_term_borrowings",
+    "commercial_paper",
+)
+
+
+def _derive_total_debt(balance: dict[str, Any]) -> None:
+    direct = balance.get("long_term_debt_total")
+    components = [
+        (key, balance[key]) for key in _DEBT_COMPONENT_KEYS if key in balance
+    ]
+    if direct is not None:
+        total = dict(direct)
+        total["derived"] = False
+        total["components"] = [str(direct.get("tag") or "LongTermDebt")]
+        if components:
+            total["warning"] = "component_tags_also_present"
+        balance["total_debt"] = total
+        return
+    if not components:
+        return
+    units = {item.get("unit") for _, item in components}
+    ends = {item.get("end") for _, item in components}
+    if len(units) != 1 or len(ends) != 1:
+        balance["total_debt_warning"] = {
+            "warning": "incompatible_component_units_or_dates",
+            "component_keys": [key for key, _ in components],
+        }
+        return
+    balance["total_debt"] = {
+        "value": sum(item["value"] for _, item in components),
+        "unit": components[0][1].get("unit"),
+        "taxonomy": "derived",
+        "end": components[0][1].get("end"),
+        "derived": True,
+        "method": "component_sum",
+        "components": [str(item.get("tag") or key) for key, item in components],
+        "component_keys": [key for key, _ in components],
+        "source_accns": [item.get("accn") for _, item in components],
+        "source_filed": [item.get("filed") for _, item in components],
+    }
+
+
 def _mark_tag_changes(statements: list[dict[str, Any]]) -> None:
     ordered = sorted(statements, key=lambda p: p.get("end") or "")
     for section in ("income", "balance", "cashflow"):
@@ -510,7 +693,13 @@ def extract_financials(
     annual: int = 4,
     quarterly: int = 4,
 ) -> dict[str, Any]:
-    periods = collect_periods(facts, annual=annual, quarterly=quarterly)
+    # YTD→QTD farkı, kullanıcı yalnız bir çeyrek istese bile önceki çeyreğe
+    # ihtiyaç duyar. İçeride sekiz çeyrek işle, dönüş kotasını sonda uygula.
+    periods = collect_periods(
+        facts,
+        annual=annual,
+        quarterly=max(quarterly, 8) if quarterly else 0,
+    )
     statements = []
     for period in periods:
         fy, fp, form, end = period["fy"], period["fp"], period["form"], period["end"]
@@ -525,19 +714,11 @@ def extract_financials(
             end=end,
             start=start,
         )
-        cashflow = _fill_statement(
-            facts,
-            CASHFLOW_DURATION,
-            fy,
-            fp,
-            form,
-            instant=False,
-            end=end,
-            start=start,
-        )
+        cashflow = _cashflow_for_period(facts, period)
         balance = _fill_statement(
             facts, BALANCE_INSTANT, fy, fp, form, instant=True, end=end
         )
+        _derive_total_debt(balance)
         statements.append(
             {
                 **{k: v for k, v in period.items() if k != "kind"},
@@ -547,7 +728,19 @@ def extract_financials(
             }
         )
     statements.sort(key=lambda p: p["end"], reverse=True)
+    _derive_quarterly_cashflow(statements)
     _mark_tag_changes(statements)
+    annual_statements = [
+        period for period in statements if _form_kind(period.get("form")) == "annual"
+    ][:annual]
+    quarter_statements = [
+        period for period in statements if _form_kind(period.get("form")) == "quarter"
+    ][:quarterly]
+    statements = sorted(
+        annual_statements + quarter_statements,
+        key=lambda period: period["end"],
+        reverse=True,
+    )
     return {
         "cik": facts.get("cik"),
         "entity": facts.get("entityName"),

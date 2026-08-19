@@ -1,8 +1,8 @@
 """
 EDGAR MCP — SEC companyfacts, frames, Form 4, 13F.
 
-Deploy: Railway (SSE) veya lokal stdio
-Auth: yok — EDGAR_USER_AGENT (isim + e-posta) zorunlu
+Deploy: Railway (Streamable HTTP /mcp) veya lokal stdio
+Auth: EDGAR_USER_AGENT (isim + e-posta) zorunlu; Railway'de MCP_AUTH_TOKEN önerilir
 Rate limit: 8 istek/sn (SEC Fair Access: max 10/sn)
 """
 
@@ -15,16 +15,34 @@ from typing import Any
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from edgar_client import EdgarClient, pad_cik
+from http_auth import BearerTokenMiddleware
 from xbrl_map import extract_financials
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("edgar-mcp")
 
-mcp = FastMCP("EDGAR MCP")
+mcp = FastMCP(
+    "EDGAR MCP",
+    host="0.0.0.0",
+    port=int(os.getenv("PORT", "8000")),
+    stateless_http=True,
+)
 _client: EdgarClient | None = None
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_request: Request) -> Response:
+    return JSONResponse({"ok": True, "name": "EDGAR MCP"})
+
+
+@mcp.custom_route("/", methods=["GET"])
+async def root(_request: Request) -> Response:
+    return JSONResponse({"ok": True, "mcp": "/mcp", "health": "/health"})
 
 
 def client() -> EdgarClient:
@@ -272,12 +290,24 @@ def search_filings(
 if __name__ == "__main__":
     import uvicorn
 
-    transport = os.getenv("MCP_TRANSPORT")
+    transport = (os.getenv("MCP_TRANSPORT") or "").strip().lower()
     if not transport:
-        transport = "sse" if os.getenv("PORT") else "stdio"
-    if transport == "sse":
-        port = int(os.getenv("PORT", "8000"))
-        app = mcp.sse_app()
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        transport = "http" if os.getenv("PORT") else "stdio"
+    if transport in {"sse", "http", "streamable-http", "streamable_http"}:
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = int(os.getenv("PORT", "8000"))
+        mcp.settings.stateless_http = True
+        if transport == "sse":
+            app = mcp.sse_app()
+            logger.info("Legacy SSE on /sse — Claude connectors should use /mcp")
+        else:
+            app = mcp.streamable_http_app()
+            logger.info("Streamable HTTP on /mcp")
+        token = (os.getenv("MCP_AUTH_TOKEN") or "").strip()
+        if token:
+            app = BearerTokenMiddleware(app, token)
+        elif os.getenv("PORT"):
+            logger.warning("MCP_AUTH_TOKEN boş — public MCP herkese açık.")
+        uvicorn.run(app, host="0.0.0.0", port=mcp.settings.port)
     else:
         mcp.run(transport="stdio")

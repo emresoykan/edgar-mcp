@@ -53,14 +53,39 @@ MCP_TRANSPORT=stdio
 }
 ```
 
-### Railway (SSE)
+### Railway → Claude (Streamable HTTP)
 
-`PORT` set edilince sunucu SSE açar. `MCP_TRANSPORT=sse` ve `EDGAR_USER_AGENT` yeterli.
+`PORT` varsa varsayılan transport `http` ve endpoint `https://<railway-host>/mcp`. **`MCP_TRANSPORT=stdio` koyma** — süreç dinlemez, Railway "online" görünür ama Claude bağlanamaz.
+
+**Variables**
+
+| Key | Değer |
+|-----|--------|
+| `EDGAR_USER_AGENT` | `Ad Soyad you@email.com` (SEC 403 olmasın diye gerçek) |
+| `MCP_TRANSPORT` | `http` (veya hiç ekleme) |
+| `MCP_AUTH_TOKEN` | uzun rastgele string |
+
+**Kontrol:** `https://<host>/health` → `{"ok": true, ...}`
+
+**Claude (claude.ai / Desktop Connectors)**
+
+1. Customize → Connectors → Add custom connector
+2. URL: `https://<host>/mcp`  (sonunda `/sse` değil)
+3. Request headers → `Authorization` = `Bearer <MCP_AUTH_TOKEN>` (`Bearer ` boşluğu dahil)
+4. Add, sohbette `+` → Connectors ile aç
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http edgar https://<host>/mcp --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
+```
+
+Eski `/sse` için `MCP_TRANSPORT=sse` (Claude connector için tercih etme).
 
 ## Test
 
 ```bash
-python -m unittest tests.test_xbrl_map tests.test_form_parsers
+python -m unittest tests.test_xbrl_map tests.test_form_parsers tests.test_http_auth tests.test_client_utils
 ```
 
 ## Kaynaklar

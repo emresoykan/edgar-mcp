@@ -304,10 +304,20 @@ if __name__ == "__main__":
             app = mcp.streamable_http_app()
             logger.info("Streamable HTTP on /mcp")
         token = (os.getenv("MCP_AUTH_TOKEN") or "").strip()
-        if token:
+        required = os.getenv("MCP_AUTH_REQUIRED", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        if required and token:
             app = BearerTokenMiddleware(app, token)
-        elif os.getenv("PORT"):
-            logger.warning("MCP_AUTH_TOKEN boş — public MCP herkese açık.")
+        elif required and not token:
+            logger.warning("MCP_AUTH_REQUIRED açık ama MCP_AUTH_TOKEN boş.")
+        elif token:
+            logger.info(
+                "MCP_AUTH_TOKEN var; Claude connector header göndermediği için "
+                "zorunlu değil (MCP_AUTH_REQUIRED=true ile açılır)."
+            )
         uvicorn.run(app, host="0.0.0.0", port=mcp.settings.port)
     else:
         mcp.run(transport="stdio")

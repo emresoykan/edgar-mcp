@@ -63,7 +63,7 @@ MCP_TRANSPORT=stdio
 |-----|--------|
 | `EDGAR_USER_AGENT` | `Ad Soyad you@email.com` (SEC 403 olmasın diye gerçek) |
 | `MCP_TRANSPORT` | `http` (veya hiç ekleme) |
-| `MCP_AUTH_TOKEN` | uzun rastgele string |
+| `MCP_AUTH_TOKEN` | Claude.ai için **koyma**. Connector formu header göndermez; token 401 + "Authentication failed" üretir. |
 
 **Kontrol:** `https://<host>/health` → `{"ok": true, ...}`
 
@@ -71,14 +71,10 @@ MCP_TRANSPORT=stdio
 
 1. Customize → Connectors → Add custom connector
 2. URL: `https://<host>/mcp`  (sonunda `/sse` değil)
-3. Request headers → `Authorization` = `Bearer <MCP_AUTH_TOKEN>` (`Bearer ` boşluğu dahil)
+3. OAuth alanlarını boş bırak, Individual sign-in kapalı
 4. Add, sohbette `+` → Connectors ile aç
 
-**Claude Code**
-
-```bash
-claude mcp add --transport http edgar https://<host>/mcp --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
-```
+Claude Code header gönderebiliyorsa `MCP_AUTH_REQUIRED=true` ve `Authorization: Bearer <token>`.
 
 Eski `/sse` için `MCP_TRANSPORT=sse` (Claude connector için tercih etme).
 

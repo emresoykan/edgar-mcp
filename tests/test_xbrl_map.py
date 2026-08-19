@@ -552,7 +552,8 @@ class ProductionMappingTests(unittest.TestCase):
         self.assertEqual(shares["value"], 60845411)
         self.assertEqual(shares["filed"], "2026-08-06")
         self.assertTrue(shares["restated"])
-        self.assertEqual(shares["previous_accn"], "q126")
+        self.assertEqual(shares["previous_value"], 60500580)
+        self.assertEqual(shares["previous_accn"], "k25")
         self.assertTrue(shares["form_mismatch"])
 
     def test_ytd_cashflow_is_preserved_and_qtd_is_derived(self):

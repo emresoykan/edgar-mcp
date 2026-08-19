@@ -346,11 +346,19 @@ def pick_fact(
         (
             f
             for f in candidates[1:]
-            if f.get("accn") != chosen.get("accn")
-            or f.get("val") != chosen.get("val")
+            if f.get("val") != chosen.get("val")
         ),
         None,
     )
+    if prior is None:
+        prior = next(
+            (
+                f
+                for f in candidates[1:]
+                if f.get("accn") != chosen.get("accn")
+            ),
+            None,
+        )
     if prior is not None:
         chosen["_restated"] = True
         chosen["_previous_value"] = prior.get("val")

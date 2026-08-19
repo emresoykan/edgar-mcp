@@ -28,6 +28,21 @@ TIMEOUT = 30.0
 CIK_RE = re.compile(r"^\d{1,10}$")
 
 
+class EdgarHTTPError(RuntimeError):
+    def __init__(self, status: int, message: str, url: str):
+        super().__init__(f"SEC {status}: {message} ({url})")
+        self.status = status
+        self.message = message
+        self.url = url
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "message": self.message,
+            "url": self.url,
+        }
+
+
 class RateLimiter:
     def __init__(self, max_calls: int = MAX_RPS, window: float = 1.0):
         self.max_calls = max_calls
@@ -90,31 +105,51 @@ class EdgarClient:
 
     def _get(self, url: str, *, json: bool = True, retries: int = 3) -> Any:
         last_exc: Exception | None = None
+        last_status = 0
+        last_message = "request failed"
         for attempt in range(retries):
             self.rate.wait_if_needed()
             try:
                 resp = self.http.get(url)
             except httpx.HTTPError as exc:
                 last_exc = exc
-                time.sleep(0.5 * (attempt + 1))
+                if attempt < retries - 1:
+                    time.sleep(0.5 * (2**attempt))
                 continue
+            last_status = resp.status_code
             if resp.status_code == 429:
-                wait = float(resp.headers.get("Retry-After", "1"))
+                last_message = "rate limit exceeded"
+                try:
+                    retry_after = float(resp.headers.get("Retry-After", "0"))
+                except ValueError:
+                    retry_after = 0
+                wait = max(retry_after, 0.5 * (2**attempt))
                 log.info("SEC 429, %.1fs bekleniyor", wait)
-                time.sleep(max(wait, 1.0))
+                if attempt < retries - 1:
+                    time.sleep(wait)
                 continue
             if resp.status_code == 403:
-                raise RuntimeError(
-                    f"SEC 403 döndü ({url}). User-Agent reddedilmiş olabilir. "
-                    f"EDGAR_USER_AGENT gerçek bir isim + e-posta olmalı."
+                raise EdgarHTTPError(
+                    403,
+                    "forbidden; EDGAR_USER_AGENT may have been rejected",
+                    url,
                 )
             if resp.status_code == 404:
-                raise FileNotFoundError(url)
+                raise EdgarHTTPError(404, "not found", url)
+            if resp.status_code >= 500:
+                last_message = (resp.text or "SEC upstream error")[:300]
+                if attempt < retries - 1:
+                    time.sleep(0.5 * (2**attempt))
+                continue
             if resp.status_code >= 400:
-                raise RuntimeError(
-                    f"SEC {resp.status_code} ({url}): {resp.text[:300]}"
+                raise EdgarHTTPError(
+                    resp.status_code,
+                    (resp.text or "request rejected")[:300],
+                    url,
                 )
             return resp.json() if json else resp.text
+        if last_status:
+            raise EdgarHTTPError(last_status, last_message, url)
         raise RuntimeError(f"SEC isteği başarısız ({url}): {last_exc}")
 
     def _tickers(self) -> list[dict[str, Any]]:

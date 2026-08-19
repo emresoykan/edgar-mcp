@@ -607,6 +607,19 @@ _NONNEGATIVE_CASHFLOW_KEYS = {
     "dividends",
     "buybacks",
 }
+_MIXED_SOURCE_LAG_DAYS = 200
+
+
+def _attach_source_lag(
+    item: dict[str, Any], source_filed: list[str | None]
+) -> None:
+    dates = [parsed for value in source_filed if (parsed := _parse_date(value))]
+    if len(dates) < 2:
+        return
+    lag = (max(dates) - min(dates)).days
+    item["source_lag_days"] = lag
+    if lag > _MIXED_SOURCE_LAG_DAYS:
+        item["mixed_source"] = True
 
 
 def _derive_quarterly_cashflow(statements: list[dict[str, Any]]) -> None:
@@ -651,8 +664,7 @@ def _derive_quarterly_cashflow(statements: list[dict[str, Any]]) -> None:
                 "source_accns": source_accns,
                 "source_filed": [previous.get("filed"), current.get("filed")],
             }
-            if source_accns[0] != source_accns[1]:
-                derived["mixed_source"] = True
+            _attach_source_lag(derived, derived["source_filed"])
             if key in _NONNEGATIVE_CASHFLOW_KEYS and value < 0:
                 derived["raw_derived_value"] = value
                 derived["value"] = None
@@ -706,6 +718,7 @@ def _derive_total_debt(balance: dict[str, Any]) -> None:
                 direct.get("filed"),
                 *[item.get("filed") for _, item in additive],
             ]
+            _attach_source_lag(total, total["source_filed"])
         balance["total_debt"] = total
         return
     if not components:
@@ -737,7 +750,7 @@ def _derive_total_debt(balance: dict[str, Any]) -> None:
             "component_keys": [key for key, _ in components],
         }
         return
-    balance["total_debt"] = {
+    total_debt = {
         "value": sum(item["value"] for _, item in components),
         "unit": components[0][1].get("unit"),
         "taxonomy": "derived",
@@ -749,6 +762,8 @@ def _derive_total_debt(balance: dict[str, Any]) -> None:
         "source_accns": [item.get("accn") for _, item in components],
         "source_filed": [item.get("filed") for _, item in components],
     }
+    _attach_source_lag(total_debt, total_debt["source_filed"])
+    balance["total_debt"] = total_debt
 
 
 def _normalize_debt_schema(balance: dict[str, Any]) -> None:

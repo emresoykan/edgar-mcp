@@ -1,6 +1,12 @@
 import unittest
 
-from xbrl_map import collect_periods, duration_basis, extract_financials, pick_fact
+from xbrl_map import (
+    _attach_source_lag,
+    collect_periods,
+    duration_basis,
+    extract_financials,
+    pick_fact,
+)
 
 
 def _fact(**kwargs):
@@ -483,6 +489,17 @@ class PeriodIntegrityTests(unittest.TestCase):
 
 
 class ProductionMappingTests(unittest.TestCase):
+    def test_mixed_source_requires_more_than_200_days(self):
+        short_lag = {}
+        _attach_source_lag(short_lag, ["2026-05-07", "2026-08-06"])
+        self.assertEqual(short_lag["source_lag_days"], 91)
+        self.assertNotIn("mixed_source", short_lag)
+
+        long_lag = {}
+        _attach_source_lag(long_lag, ["2025-11-05", "2026-08-06"])
+        self.assertEqual(long_lag["source_lag_days"], 274)
+        self.assertTrue(long_lag["mixed_source"])
+
     def test_latest_filed_instant_fact_wins_and_is_marked_restated(self):
         facts = {
             "cik": 1296445,
@@ -664,7 +681,8 @@ class ProductionMappingTests(unittest.TestCase):
         self.assertEqual(q2_cashflow["cfo"]["method"], "ytd_diff")
         self.assertEqual(q2_cashflow["cfo"]["start"], "2026-04-01")
         self.assertEqual(q2_cashflow["cfo"]["source_accns"], ["q126", "q226"])
-        self.assertTrue(q2_cashflow["cfo"]["mixed_source"])
+        self.assertEqual(q2_cashflow["cfo"]["source_lag_days"], 91)
+        self.assertNotIn("mixed_source", q2_cashflow["cfo"])
         buybacks = q2_cashflow["buybacks"]
         self.assertIsNone(buybacks["value"])
         self.assertEqual(buybacks["raw_derived_value"], -5)
@@ -735,7 +753,30 @@ class ProductionMappingTests(unittest.TestCase):
                         "units": {"USD": instant_series([50, 60])}
                     },
                     "CommercialPaper": {
-                        "units": {"USD": instant_series([40, 45])}
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=40,
+                                    **{
+                                        k: v
+                                        for k, v in periods[0].items()
+                                        if k != "start"
+                                    },
+                                ),
+                                _fact(
+                                    val=45,
+                                    **{
+                                        **{
+                                            k: v
+                                            for k, v in periods[1].items()
+                                            if k != "start"
+                                        },
+                                        "filed": "2025-10-01",
+                                        "accn": "k24-later",
+                                    },
+                                ),
+                            ]
+                        }
                     },
                 }
             },
@@ -754,6 +795,8 @@ class ProductionMappingTests(unittest.TestCase):
         self.assertEqual(
             direct["total_debt"]["method"], "long_term_plus_short_term"
         )
+        self.assertEqual(direct["total_debt"]["source_lag_days"], 242)
+        self.assertTrue(direct["total_debt"]["mixed_source"])
 
         fallback = by_end["2023-12-31"]["balance"]["total_debt"]
         self.assertEqual(fallback["value"], 790)

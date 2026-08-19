@@ -18,7 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from edgar_client import EdgarClient, pad_cik
+from edgar_client import EdgarClient, EdgarHTTPError, pad_cik
 from http_auth import BearerTokenMiddleware
 from xbrl_map import extract_financials
 
@@ -175,6 +175,13 @@ def get_concept(
                 "units": trimmed,
             }
         )
+    except EdgarHTTPError as exc:
+        error = exc.as_dict()
+        if exc.status == 404:
+            error["message"] = "concept not found"
+        error["taxonomy"] = taxonomy
+        error["tag"] = tag
+        return _json({"error": error})
     except Exception as exc:
         return _err(exc)
 

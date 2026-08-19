@@ -1,0 +1,18 @@
+{
+  "name": "edgar-mcp",
+  "install": "bash scripts/cloud-install.sh",
+  "start": "test -x .venv/bin/python && .venv/bin/python -c \"import mcp, fastapi, httpx\"",
+  "terminals": [
+    {
+      "name": "MCP HTTP",
+      "command": "MCP_TRANSPORT=http PORT=8000 .venv/bin/python server.py",
+      "description": "EDGAR MCP Streamable HTTP server. Health at http://127.0.0.1:8000/health, MCP at /mcp."
+    }
+  ],
+  "ports": [
+    {
+      "name": "MCP HTTP",
+      "port": 8000
+    }
+  ]
+}

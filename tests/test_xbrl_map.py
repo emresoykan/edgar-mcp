@@ -29,6 +29,7 @@ FACTS = {
                             val=391035000000,
                             start="2023-10-01",
                             frame="CY2024",
+                            accn="k2024",
                         ),
                         _fact(
                             val=999,
@@ -41,7 +42,7 @@ FACTS = {
             "NetIncomeLoss": {
                 "units": {
                     "USD": [
-                        _fact(val=93736000000, start="2023-10-01", frame="CY2024"),
+                        _fact(val=93736000000, start="2023-10-01", frame="CY2024", accn="k2024"),
                         _fact(
                             val=21448000000,
                             fy=2025,
@@ -51,6 +52,7 @@ FACTS = {
                             start="2024-09-29",
                             filed="2025-01-31",
                             frame="CY2025Q1",
+                            accn="q12025",
                         ),
                         _fact(
                             val=60000000000,
@@ -61,6 +63,7 @@ FACTS = {
                             start="2024-09-29",
                             filed="2025-01-31",
                             frame="CY2025Q1-us_gaap_ProductMember",
+                            accn="q12025",
                         ),
                     ]
                 }
@@ -68,7 +71,7 @@ FACTS = {
             "Assets": {
                 "units": {
                     "USD": [
-                        _fact(val=364980000000, frame="CY2024Q4I"),
+                        _fact(val=364980000000, frame="CY2024Q4I", accn="k2024"),
                     ]
                 }
             },
@@ -136,6 +139,339 @@ class ExtractTests(unittest.TestCase):
         periods = collect_periods(FACTS, annual=4, quarterly=4)
         forms = {p["form"] for p in periods}
         self.assertNotIn("8-K", forms)
+
+
+class PeriodIntegrityTests(unittest.TestCase):
+    def test_comparative_10k_does_not_duplicate_fy(self):
+        facts = {
+            "cik": 1296445,
+            "entityName": "ORMAT TECHNOLOGIES INC",
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=879654,
+                                    fy=2024,
+                                    fp="FY",
+                                    end="2024-12-31",
+                                    start="2024-01-01",
+                                    filed="2025-02-27",
+                                    accn="k24",
+                                    frame="CY2024",
+                                ),
+                                _fact(
+                                    val=879654,
+                                    fy=2025,
+                                    fp="FY",
+                                    end="2024-12-31",
+                                    start="2024-01-01",
+                                    filed="2026-02-27",
+                                    accn="k25",
+                                    frame="CY2024",
+                                ),
+                                _fact(
+                                    val=989543,
+                                    fy=2025,
+                                    fp="FY",
+                                    end="2025-12-31",
+                                    start="2025-01-01",
+                                    filed="2026-02-27",
+                                    accn="k25",
+                                    frame="CY2025",
+                                ),
+                            ]
+                        }
+                    },
+                    "NetIncomeLoss": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=1,
+                                    fy=2024,
+                                    fp="FY",
+                                    end="2024-12-31",
+                                    start="2024-01-01",
+                                    filed="2025-02-27",
+                                    accn="k24",
+                                ),
+                                _fact(
+                                    val=2,
+                                    fy=2025,
+                                    fp="FY",
+                                    end="2025-12-31",
+                                    start="2025-01-01",
+                                    filed="2026-02-27",
+                                    accn="k25",
+                                ),
+                            ]
+                        }
+                    },
+                    "Assets": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=10,
+                                    fy=2024,
+                                    fp="FY",
+                                    end="2024-12-31",
+                                    filed="2025-02-27",
+                                    accn="k24",
+                                ),
+                                _fact(
+                                    val=20,
+                                    fy=2025,
+                                    fp="FY",
+                                    end="2025-12-31",
+                                    filed="2026-02-27",
+                                    accn="k25",
+                                ),
+                            ]
+                        }
+                    },
+                    "LongTermDebt": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=2344746,
+                                    fy=2024,
+                                    fp="FY",
+                                    end="2024-12-31",
+                                    filed="2025-02-27",
+                                    accn="k24",
+                                ),
+                                _fact(
+                                    val=2344746,
+                                    fy=2025,
+                                    fp="FY",
+                                    end="2024-12-31",
+                                    filed="2026-02-27",
+                                    accn="k25",
+                                ),
+                                _fact(
+                                    val=2660570,
+                                    fy=2025,
+                                    fp="FY",
+                                    end="2025-12-31",
+                                    filed="2026-02-27",
+                                    accn="k25",
+                                ),
+                            ]
+                        }
+                    },
+                    "CashAndCashEquivalentsAtCarryingValue": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=94395,
+                                    fy=2024,
+                                    fp="FY",
+                                    end="2024-12-31",
+                                    filed="2025-02-27",
+                                    accn="k24",
+                                ),
+                                _fact(
+                                    val=100000,
+                                    fy=2025,
+                                    fp="FY",
+                                    end="2025-12-31",
+                                    filed="2026-02-27",
+                                    accn="k25",
+                                ),
+                            ]
+                        }
+                    },
+                }
+            },
+        }
+        out = extract_financials(facts, annual=4, quarterly=0)
+        fy_periods = [p for p in out["periods"] if p["fp"] == "FY"]
+        self.assertEqual(len(fy_periods), 2)
+        by_end = {p["end"]: p for p in fy_periods}
+        self.assertEqual(set(by_end), {"2024-12-31", "2025-12-31"})
+        self.assertEqual(by_end["2024-12-31"]["income"]["revenue"]["value"], 879654)
+        self.assertEqual(by_end["2024-12-31"]["balance"]["long_term_debt"]["value"], 2344746)
+        self.assertEqual(by_end["2024-12-31"]["balance"]["cash"]["value"], 94395)
+        self.assertEqual(by_end["2025-12-31"]["income"]["revenue"]["value"], 989543)
+        self.assertEqual(by_end["2025-12-31"]["balance"]["long_term_debt"]["value"], 2660570)
+        self.assertNotEqual(
+            by_end["2024-12-31"]["balance"]["long_term_debt"]["end"],
+            "2025-12-31",
+        )
+
+    def test_pick_fact_does_not_backfill_other_end(self):
+        series = [_fact(val=2660570, fy=2025, fp="FY", end="2025-12-31")]
+        chosen = pick_fact(series, 2025, "FY", "10-K", instant=True, end="2024-12-31")
+        self.assertIsNone(chosen)
+
+    def test_duration_requires_start_match(self):
+        series = [
+            _fact(
+                val=100,
+                fy=2026,
+                fp="Q2",
+                form="10-Q",
+                end="2025-06-30",
+                start="2025-01-01",
+                filed="2025-08-01",
+            )
+        ]
+        chosen = pick_fact(
+            series,
+            2026,
+            "Q2",
+            "10-Q",
+            instant=False,
+            end="2025-06-30",
+            start="2025-04-01",
+        )
+        self.assertIsNone(chosen)
+
+    def test_sg_and_a_does_not_use_selling_and_marketing(self):
+        facts = {
+            "cik": 1,
+            "entityName": "X",
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=10,
+                                    start="2024-01-01",
+                                    end="2024-12-31",
+                                    accn="k",
+                                )
+                            ]
+                        }
+                    },
+                    "Assets": {
+                        "units": {
+                            "USD": [_fact(val=1, end="2024-12-31", accn="k")]
+                        }
+                    },
+                    "SellingAndMarketingExpense": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=18898,
+                                    start="2024-01-01",
+                                    end="2024-12-31",
+                                    accn="k",
+                                )
+                            ]
+                        }
+                    },
+                    "GeneralAndAdministrativeExpense": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=50000,
+                                    start="2024-01-01",
+                                    end="2024-12-31",
+                                    accn="k",
+                                )
+                            ]
+                        }
+                    },
+                }
+            },
+        }
+        out = extract_financials(facts, annual=1, quarterly=0)
+        fy = out["periods"][0]
+        self.assertNotIn("sg_and_a", fy["income"])
+        self.assertEqual(fy["income"]["selling_and_marketing"]["value"], 18898)
+        self.assertEqual(fy["income"]["general_and_administrative"]["value"], 50000)
+
+    def test_tag_changed_on_interest_alias_shift(self):
+        facts = {
+            "cik": 1,
+            "entityName": "X",
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=1,
+                                    fy=2023,
+                                    end="2023-12-31",
+                                    start="2023-01-01",
+                                    filed="2024-02-01",
+                                    accn="k23",
+                                ),
+                                _fact(
+                                    val=2,
+                                    fy=2024,
+                                    end="2024-12-31",
+                                    start="2024-01-01",
+                                    filed="2025-02-01",
+                                    accn="k24",
+                                ),
+                            ]
+                        }
+                    },
+                    "Assets": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=1,
+                                    fy=2023,
+                                    end="2023-12-31",
+                                    filed="2024-02-01",
+                                    accn="k23",
+                                ),
+                                _fact(
+                                    val=2,
+                                    fy=2024,
+                                    end="2024-12-31",
+                                    filed="2025-02-01",
+                                    accn="k24",
+                                ),
+                            ]
+                        }
+                    },
+                    "InterestExpense": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=10,
+                                    fy=2023,
+                                    end="2023-12-31",
+                                    start="2023-01-01",
+                                    filed="2024-02-01",
+                                    accn="k23",
+                                )
+                            ]
+                        }
+                    },
+                    "InterestExpenseNonoperating": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=11,
+                                    fy=2024,
+                                    end="2024-12-31",
+                                    start="2024-01-01",
+                                    filed="2025-02-01",
+                                    accn="k24",
+                                )
+                            ]
+                        }
+                    },
+                }
+            },
+        }
+        out = extract_financials(facts, annual=2, quarterly=0)
+        by_end = {p["end"]: p for p in out["periods"]}
+        self.assertEqual(
+            by_end["2023-12-31"]["income"]["interest_expense"]["tag"],
+            "InterestExpense",
+        )
+        later = by_end["2024-12-31"]["income"]["interest_expense"]
+        self.assertEqual(later["tag"], "InterestExpenseNonoperating")
+        self.assertTrue(later.get("tag_changed"))
 
 
 if __name__ == "__main__":

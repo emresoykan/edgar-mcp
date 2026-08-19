@@ -153,6 +153,14 @@ BALANCE_INSTANT: dict[str, list[tuple[str, str]]] = {
         ("us-gaap", "EquityAttributableToNoncontrollingInterest"),
         ("ifrs-full", "NoncontrollingInterests"),
     ],
+    "redeemable_noncontrolling_interest": [
+        ("us-gaap", "RedeemableNoncontrollingInterestEquityCarryingAmount"),
+        ("us-gaap", "TemporaryEquityCarryingAmountAttributableToParent"),
+        (
+            "us-gaap",
+            "TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests",
+        ),
+    ],
     "stockholders_equity": [
         ("us-gaap", "StockholdersEquity"),
         ("us-gaap", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"),
@@ -771,6 +779,52 @@ def _normalize_debt_schema(balance: dict[str, Any]) -> None:
         balance.setdefault(key, None)
 
 
+_BALANCE_CHECK_COMPONENTS = (
+    "assets",
+    "liabilities",
+    "stockholders_equity",
+    "minority_interest",
+    "redeemable_noncontrolling_interest",
+)
+_BALANCE_CHECK_TOLERANCE = 0.001
+
+
+def _add_balance_check(balance: dict[str, Any]) -> None:
+    missing = [
+        key
+        for key in _BALANCE_CHECK_COMPONENTS
+        if not isinstance(balance.get(key), dict)
+        or balance[key].get("value") is None
+    ]
+    if missing:
+        balance["balance_check"] = {
+            "residual": None,
+            "residual_pct_assets": None,
+            "tolerance_pct": _BALANCE_CHECK_TOLERANCE,
+            "ok": False,
+            "reason": "missing_component",
+            "missing_components": missing,
+        }
+        return
+    assets = balance["assets"]["value"]
+    residual = assets - sum(
+        balance[key]["value"] for key in _BALANCE_CHECK_COMPONENTS if key != "assets"
+    )
+    residual_pct = residual / assets if assets else None
+    check = {
+        "residual": residual,
+        "residual_pct_assets": residual_pct,
+        "tolerance_pct": _BALANCE_CHECK_TOLERANCE,
+        "ok": (
+            residual_pct is not None
+            and abs(residual_pct) <= _BALANCE_CHECK_TOLERANCE
+        ),
+    }
+    if residual_pct is None:
+        check["reason"] = "zero_assets"
+    balance["balance_check"] = check
+
+
 def _mark_tag_changes(statements: list[dict[str, Any]]) -> None:
     ordered = sorted(statements, key=lambda p: p.get("end") or "")
     for section in ("income", "balance", "cashflow"):
@@ -821,6 +875,7 @@ def extract_financials(
         )
         _derive_total_debt(balance)
         _normalize_debt_schema(balance)
+        _add_balance_check(balance)
         statements.append(
             {
                 **{k: v for k, v in period.items() if k != "kind"},

@@ -1,6 +1,7 @@
 import unittest
 
 from xbrl_map import (
+    _add_balance_check,
     _attach_source_lag,
     collect_periods,
     duration_basis,
@@ -489,6 +490,91 @@ class PeriodIntegrityTests(unittest.TestCase):
 
 
 class ProductionMappingTests(unittest.TestCase):
+    def test_redeemable_nci_closes_balance_sheet(self):
+        period = dict(
+            fy=2025,
+            end="2025-12-31",
+            filed="2026-02-26",
+            accn="k25",
+        )
+
+        def instant(value):
+            return _fact(val=value, **period)
+
+        facts = {
+            "cik": 1296445,
+            "entityName": "ORMAT TECHNOLOGIES INC",
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "units": {
+                            "USD": [
+                                _fact(
+                                    val=1,
+                                    start="2025-01-01",
+                                    **period,
+                                )
+                            ]
+                        }
+                    },
+                    "Assets": {"units": {"USD": [instant(6246508)]}},
+                    "Liabilities": {"units": {"USD": [instant(3555232)]}},
+                    "StockholdersEquity": {
+                        "units": {"USD": [instant(2543943)]}
+                    },
+                    "MinorityInterest": {
+                        "units": {"USD": [instant(136931)]}
+                    },
+                    "RedeemableNoncontrollingInterestEquityCarryingAmount": {
+                        "units": {"USD": [instant(10402)]}
+                    },
+                }
+            },
+        }
+        out = extract_financials(facts, annual=1, quarterly=0)
+        balance = out["periods"][0]["balance"]
+        redeemable = balance["redeemable_noncontrolling_interest"]
+        self.assertEqual(redeemable["value"], 10402)
+        self.assertEqual(
+            redeemable["tag"],
+            "RedeemableNoncontrollingInterestEquityCarryingAmount",
+        )
+        self.assertEqual(balance["balance_check"]["residual"], 0)
+        self.assertEqual(balance["balance_check"]["residual_pct_assets"], 0)
+        self.assertTrue(balance["balance_check"]["ok"])
+
+    def test_balance_check_lists_missing_components(self):
+        balance = {
+            "assets": {"value": 100},
+            "liabilities": {"value": 60},
+            "stockholders_equity": {"value": 40},
+        }
+        _add_balance_check(balance)
+        check = balance["balance_check"]
+        self.assertFalse(check["ok"])
+        self.assertEqual(check["reason"], "missing_component")
+        self.assertEqual(
+            check["missing_components"],
+            ["minority_interest", "redeemable_noncontrolling_interest"],
+        )
+        self.assertIsNone(check["residual"])
+        self.assertIsNone(check["residual_pct_assets"])
+
+    def test_balance_check_accepts_rounding_residual(self):
+        balance = {
+            "assets": {"value": 6788245},
+            "liabilities": {"value": 4044260},
+            "stockholders_equity": {"value": 2597579},
+            "minority_interest": {"value": 136501},
+            "redeemable_noncontrolling_interest": {"value": 9906},
+        }
+        _add_balance_check(balance)
+        check = balance["balance_check"]
+        self.assertEqual(check["residual"], -1)
+        self.assertAlmostEqual(check["residual_pct_assets"], -1 / 6788245)
+        self.assertEqual(check["tolerance_pct"], 0.001)
+        self.assertTrue(check["ok"])
+
     def test_mixed_source_requires_more_than_200_days(self):
         short_lag = {}
         _attach_source_lag(short_lag, ["2026-05-07", "2026-08-06"])

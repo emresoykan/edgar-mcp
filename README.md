@@ -16,6 +16,14 @@ SEC EDGAR'a User-Agent ile bağlanan MCP sunucusu. API key yok. Finansallar FMP 
 | `get_13f` | Kurumun 13F-HR portföyü (hisse ticker'ı değil) |
 | `search_filings` | Full-text (efts.sec.gov) |
 
+### Finansal eşleme notları
+
+- `balance.balance_check`, aktiflerin yükümlülükler + özkaynak + azınlık
+  paylarıyla kapanıp kapanmadığını kontrol eder; eksik bileşenleri açıkça listeler.
+- FD/EV hesabında `minority_interest` ile birlikte mezzanine/temporary equity
+  niteliğindeki `redeemable_noncontrolling_interest` da borç benzeri kalem olarak
+  eklenmelidir.
+
 ## Kurulum
 
 ```bash
